@@ -1,8 +1,58 @@
 import Product from "../models/Product.js";
 
+/** Keep data URLs intact; normalize /uploads/ paths */
+function normalizeImageUrl(url) {
+    if (!url || typeof url !== 'string') return '';
+    const trimmed = url.trim();
+    if (trimmed.startsWith('data:')) return trimmed;
+    const match = trimmed.match(/\/uploads\/[^?#\s]+/i);
+    if (match) return match[0];
+    return trimmed;
+}
+
+function prioritizeImages(images) {
+    const embedded = images.filter((url) => url.startsWith('data:'));
+    const uploaded = images.filter((url) => url.startsWith('/uploads/'));
+    const other = images.filter((url) => !url.startsWith('data:') && !url.startsWith('/uploads/'));
+    return [...embedded, ...uploaded, ...other];
+}
+
+function normalizeProductPayload(body) {
+    let images = Array.isArray(body.images)
+        ? body.images.map(normalizeImageUrl).filter(Boolean)
+        : [];
+
+    if (body.imageUrl?.trim()) {
+        const normalized = normalizeImageUrl(body.imageUrl);
+        if (normalized && !images.includes(normalized)) {
+            images.unshift(normalized);
+        }
+    } else if (body.image?.trim()) {
+        const normalized = normalizeImageUrl(body.image);
+        if (normalized && !images.includes(normalized)) {
+            images.unshift(normalized);
+        }
+    }
+
+    images = prioritizeImages(images);
+
+    const primary = images[0] || '';
+
+    return {
+        ...body,
+        images,
+        imageUrl: primary,
+        image: primary,
+    };
+}
+
 export const addProduct = async (req, res) => {
     try {
-        const newProduct = new Product(req.body);
+        const payload = normalizeProductPayload(req.body);
+        if (!payload.images?.length) {
+            return res.status(400).json({ message: 'At least one product image is required' });
+        }
+        const newProduct = new Product(payload);
         const savedProduct = await newProduct.save();
         res.status(201).json({ message: "Product added successfully", product: savedProduct });
     } catch (error) {
@@ -13,7 +63,11 @@ export const addProduct = async (req, res) => {
 export const updateProduct = async (req, res) => {
     const { productId } = req.params;
     try {
-        const updatedProduct = await Product.findByIdAndUpdate(productId, req.body, { new: true });
+        const payload = normalizeProductPayload(req.body);
+        if (!payload.images?.length) {
+            return res.status(400).json({ message: 'At least one product image is required' });
+        }
+        const updatedProduct = await Product.findByIdAndUpdate(productId, payload, { new: true });
         if (!updatedProduct) {
             return res.status(404).json({ message: "Product not found" });
         }   
